@@ -1,0 +1,27 @@
+{
+  "project": "Earth-flash",
+  "description": "浏览器科幻 RTS",
+  "modes": {
+    "dev": {
+      "ports": [
+        5173
+      ],
+      "url": "http://localhost:5173/",
+      "command": "vite",
+      "env": {
+        "PORT": "5173",
+        "NODE_ENV": "development"
+      }
+    },
+    "preview": {
+      "ports": [
+        5173
+      ],
+      "url": "http://localhost:5173/",
+      "command": "vite preview",
+      "env": {
+        "PORT": "5173"
+      }
+    }
+  }
+}
