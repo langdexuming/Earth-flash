@@ -23,7 +23,7 @@ export const ABILITIES = {
   scan: { name: "战术扫描", cost: 20, cooldown: 35, description: "永久揭示目标周围区域" },
   overcharge: { name: "武器超载", cost: 30, cooldown: 45, description: "全军伤害 +35% · 持续 8 秒" },
 };
-export const ORDERS = { idle: "待命", move: "移动", attack: "攻击", patrol: "巡逻", guard: "护卫", hold: "驻守", harvest: "采集" };
+export const ORDERS = { idle: "待命", move: "移动", attack: "攻击", patrol: "巡逻", guard: "护卫", hold: "驻守", harvest: "采集", retreat: "撤回维修" };
 export const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
 export const isWater = (x, y) => x > 35 && y > 35 && x < 550 && y < 310 && ((x - 128) / 420) ** 2 + ((y + 18) / 312) ** 2 < 0.96;
@@ -50,7 +50,8 @@ export function createGame() {
     units: [makeUnit(1, "tank", 620, 445), makeUnit(2, "tank", 690, 530), makeUnit(3, "tank", 760, 610),
       makeUnit(4, "infantry", 870, 555), makeUnit(5, "infantry", 925, 610), makeUnit(6, "infantry", 1010, 585),
       makeUnit(7, "harvester", 535, 620), makeUnit(8, "enemy", 1220, 310, "gold"), makeUnit(9, "enemy", 1335, 355, "gold"), makeUnit(10, "enemy", 1380, 270, "gold")],
-    home, enemyBase, buildings: [home, building("barracks-1", "barracks", 284, 450), building("factory-1", "factory", 476, 798), building("airfield-1", "airfield", 716, 820), enemyBase, building("enemy-factory", "factory", 1500, 318, "gold")],
+    home, enemyBase, buildings: [home, building("barracks-1", "barracks", 284, 450), building("factory-1", "factory", 476, 798), building("airfield-1", "airfield", 716, 820), enemyBase, building("enemy-factory", "factory", 1500, 318, "gold"), building("enemy-airfield", "airfield", 1180, 115, "gold")],
+    enemyCredits: 360, enemyThinkAt: 35,
     ores, ore: ores[0], queue: [], research: [], researched: [], abilityEnergy: 100, cooldowns: { scan: 0, overcharge: 0 }, overchargeUntil: 0,
     scans: [], fog: true, visible: [], explored: [], visibilityTimer: 0, incomeTimer: 3, effects: [], explosions: [],
     events: ["占领矿区获取收入，建造生产设施，摧毁敌方指挥中心。"], result: null, paused: false, marker: null, groups: {}, sound: true,
@@ -96,6 +97,11 @@ export function issueOrder(g, ids, order, point, append = false) {
   if (["move", "attack", "patrol", "guard"].includes(order) && !point) return false;
   let count = 0;
   units.forEach((u, i) => {
+    if (order === "retreat") {
+      const facility = repairDestination(g, u);
+      if (!facility || u.hp >= u.maxHp) return;
+      u.pending = []; assign(u, { order, target: facility.point, targetId: facility.building.id }); count++; return;
+    }
     if (order === "guard" && (point.team !== "blue" || point.id === u.id)) return;
     if (point && ["move", "patrol"].includes(order) && !walkable(point.x, point.y, TYPES[u.type].domain)) return;
     const formation = units.length > 1 && !point?.id;
@@ -108,8 +114,29 @@ export function issueOrder(g, ids, order, point, append = false) {
     count++;
   });
   if (point) g.marker = { ...point, life: 1.6 };
-  message(g, count ? (ORDERS[order] || "停止") + "指令已" + (append ? "加入路径队列。" : "下达。") : "目标不适合所选部队：舰艇在水面移动，地面部队在陆地移动。");
+  message(g, order === "retreat" ? count ? count + " 支部队撤回维修：脱战 4 秒后，每 8 HP 消耗 1 合金。" : "所选部队无需维修，或缺少对应的已建成生产设施。" : count ? (ORDERS[order] || "停止") + "指令已" + (append ? "加入路径队列。" : "下达。") : "目标不适合所选部队：舰艇在水面移动，地面部队在陆地移动。");
   return count > 0;
+}
+function repairDestination(g, u) {
+  const facilities = g.buildings.filter(b => b.team === u.team && b.hp > 0 && b.remaining <= 0 && b.type === TYPES[u.type].producer).sort((a, b) => distance(u, a) - distance(u, b));
+  for (const b of facilities) {
+    const point = nearestStand(g, { x: b.x + BUILDINGS[b.type].radius + 24, y: b.y - 35 }, u.type);
+    if (point && distance(point, b) <= BUILDINGS[b.type].radius + 100) return { building: b, point };
+  }
+  return null;
+}
+function retreat(g, u, dt) {
+  const b = g.buildings.find(b => b.id === u.targetId && b.hp > 0 && b.remaining <= 0);
+  if (!b) {
+    const destination = repairDestination(g, u);
+    if (!destination) { finishOrder(u); message(g, "维修设施已失去，部队原地待命。"); return; }
+    assign(u, { order: "retreat", target: destination.point, targetId: destination.building.id }); return;
+  }
+  if (distance(u, b) > BUILDINGS[b.type].radius + 100 || !canStand(g, u.x, u.y, u.type)) { move(g, u, u.target, dt); return; }
+  if (g.time - (u.lastHitAt ?? -10) < 4) return;
+  const amount = Math.min(dt * 24, u.maxHp - u.hp, g.alloy * 8);
+  u.hp += amount; g.alloy -= amount / 8;
+  if (u.hp >= u.maxHp) { finishOrder(u); message(g, TYPES[u.type].name + "维修完成，等待部署。"); }
 }
 export function productionReason(g, type, producerId) {
   const d = TYPES[type];
@@ -261,12 +288,60 @@ function damage(g, u, target) {
   const d = TYPES[u.type];
   const buff = u.team === "blue" ? (g.researched.includes("ballistics") ? 1.12 : 1) * (g.overchargeUntil > g.time ? 1.35 : 1) : 1;
   target.hp -= d.damage * buff / (target.team === "blue" && g.researched.includes("armor") ? 1.15 : 1);
+  target.lastHitAt = g.time;
   u.cooldown = d.cooldown || 1.1;
   g.effects.push({ id: g.nextId++, x: u.x, y: u.y, sourceType: u.type, tx: target.x, ty: target.y, targetType: target.type, life: 0.22, team: u.team });
   if (target.hp <= 0) {
     g.explosions.push({ id: g.nextId++, x: target.x, y: target.y, life: 0.9, building: typeof target.id === "string" });
     if (u.team === "blue") { g.kills++; g.credits += 30; }
     if (typeof target.id === "string") { g.queue = g.queue.filter(q => q.producerId !== target.id); message(g, (target.team === "blue" ? "我方" : "敌方") + BUILDINGS[target.type].name + "被摧毁。"); }
+  }
+}
+function enemyFacility(g, type) {
+  return g.buildings.find(b => b.team === "gold" && b.type === type && b.hp > 0 && b.remaining <= 0);
+}
+function reinforceEnemy(g) {
+  g.wave++;
+  const factory = enemyFacility(g, "factory"), airfield = enemyFacility(g, "airfield");
+  g.waveAt += factory ? 55 : 75;
+  const mines = g.ores.filter(o => o.team === "gold").length;
+  const capacity = Math.min(factory ? 6 : 2, g.wave + mines, 18 - g.units.filter(u => u.team === "gold" && u.hp > 0).length);
+  let count = 0, aircraft = false;
+  for (let i = 0; i < capacity; i++) {
+    let type = g.wave >= 3 && i === 0 && airfield ? "aircraft" : g.wave >= 3 && i < 2 && factory ? "tank" : "enemy";
+    let cost = TYPES[type].cost || 120;
+    if (g.enemyCredits < cost) { type = "enemy"; cost = 120; }
+    if (g.enemyCredits < cost) break;
+    const producer = type === "aircraft" ? airfield : factory || g.enemyBase;
+    const spawn = nearestStand(g, { x: producer.x - BUILDINGS[producer.type].radius - 28, y: producer.y + 35 + i * 22 }, type);
+    if (!spawn) continue;
+    const u = makeUnit(g.nextId++, type, spawn.x, spawn.y, "gold");
+    u.enemyRole = i % 2 === 0 && type !== "aircraft" ? "raider" : "assault";
+    assign(u, { order: "attack", target: { x: g.home.x, y: g.home.y }, targetId: null });
+    g.units.push(u); g.enemyCredits -= cost; count++; aircraft ||= type === "aircraft";
+  }
+  message(g, count ? "第 " + g.wave + " 波敌军抵达 · " + count + " 支部队" + (aircraft ? "，含空中单位。" : "。") : "敌军增援受阻：资源不足或兵力已满。");
+}
+function directEnemy(g) {
+  if (g.time < g.enemyThinkAt) return;
+  g.enemyThinkAt = g.time + 3;
+  const forces = g.units.filter(u => u.team === "gold" && u.hp > 0);
+  const threat = g.units.filter(u => u.team === "blue" && u.hp > 0 && TYPES[u.type].damage && distance(u, g.enemyBase) < 310).sort((a, b) => distance(a, g.enemyBase) - distance(b, g.enemyBase))[0];
+  const defenders = threat ? forces.slice().sort((a, b) => distance(a, g.enemyBase) - distance(b, g.enemyBase)).slice(0, 3) : [];
+  for (const u of forces) {
+    let target = g.home, targetId = null, order = "attack";
+    if (defenders.includes(u)) { target = threat; targetId = threat.id; }
+    else if (u.enemyRole === "raider") {
+      const objectives = g.ores.filter(o => o.team !== "gold");
+      target = objectives.sort((a, b) => (a.team === "blue" ? -1 : 0) - (b.team === "blue" ? -1 : 0) || distance(u, a) - distance(u, b))[0] || g.ores.find(o => o.id === u.enemyOreId) || g.home;
+      // Stay at the selected mine after taking control, until ordered elsewhere.
+      const held = g.ores.find(o => o.id === u.enemyOreId);
+      if (held?.team === "gold" && distance(u, held) < 120) target = held;
+      u.enemyOreId = target.id;
+      if (distance(u, target) < 80) order = "hold";
+    }
+    const point = { x: target.x, y: target.y };
+    if (u.order !== order || u.targetId !== targetId || !u.target || distance(u.target, point) > 45) assign(u, { order, target: point, targetId });
   }
 }
 export function update(g, dt) {
@@ -283,7 +358,11 @@ export function update(g, dt) {
     o.team = team; o.contested = blue > 0 && gold > 0;
   }
   g.incomeTimer -= dt;
-  if (g.incomeTimer <= 0) { const e = economy(g); g.credits += e.credits; g.alloy += e.alloy; g.incomeTimer += 3; }
+  if (g.incomeTimer <= 0) {
+    const e = economy(g); g.credits += e.credits; g.alloy += e.alloy;
+    g.enemyCredits += 12 + g.ores.filter(o => o.team === "gold").length * 18;
+    g.incomeTimer += 3;
+  }
   for (const b of g.buildings) {
     if (b.hp <= 0) continue;
     if (b.remaining > 0) { b.remaining = Math.max(0, b.remaining - dt); if (!b.remaining) message(g, BUILDINGS[b.type].name + "已建成，生产与人口容量已启用。"); }
@@ -303,22 +382,19 @@ export function update(g, dt) {
   for (const q of g.research) { q.remaining -= dt; if (q.remaining <= 0) { g.researched.push(q.id); message(g, TECHS[q.id].name + "研究完成。"); } }
   g.research = g.research.filter(q => q.remaining > 0);
   if (g.time >= g.waveAt && g.enemyBase.hp > 0) {
-    g.wave++; g.waveAt += 55;
-    const enemyMines = g.ores.filter(o => o.team === "gold").length;
-    for (let i = 0; i < Math.min(6, g.wave + enemyMines); i++) {
-      const type = g.wave >= 3 && i === 0 ? "aircraft" : "enemy", spawn = nearestStand(g, { x: 1250 + i * 40, y: 260 }, type);
-      const u = makeUnit(g.nextId++, type, spawn.x, spawn.y, "gold"); u.order = "attack"; u.target = { x: g.home.x, y: g.home.y }; g.units.push(u);
-    }
-    message(g, "第 " + g.wave + " 波敌军增援抵达" + (g.wave >= 3 ? "，发现空中单位。" : "。"));
+    reinforceEnemy(g);
   }
+  directEnemy(g);
   for (const u of g.units) {
     if (u.hp <= 0) continue;
     u.cooldown -= dt; const d = TYPES[u.type];
+    if (u.order === "retreat") { retreat(g, u, dt); continue; }
     if (u.type === "harvester" && u.order === "harvest") { mine(g, u, dt); continue; }
+    if (u.order === "attack" && u.targetId && ![...g.units, ...g.buildings].some(v => v.id === u.targetId && v.hp > 0)) finishOrder(u);
     const entities = [...g.units, ...g.buildings].filter(v => v.hp > 0 && v.team !== u.team && (u.team !== "blue" || isVisible(g, v)));
     const explicit = u.targetId && entities.find(v => v.id === u.targetId);
     const inRange = v => v && distance(u, v) < d.range + (typeof v.id === "string" ? BUILDINGS[v.type].radius : 0);
-    const nearby = entities.filter(inRange).sort((a, b) => distance(u, a) - distance(u, b))[0], target = inRange(explicit) ? explicit : nearby;
+    const nearby = entities.filter(inRange).sort((a, b) => distance(u, a) - distance(u, b))[0], target = explicit ? inRange(explicit) ? explicit : null : nearby;
     if (target && d.damage && u.order !== "move") { if (u.cooldown <= 0) damage(g, u, target); }
     else if (u.order === "guard") {
       const friend = [...g.units, ...g.buildings].find(v => v.id === u.targetId && v.hp > 0);
@@ -330,11 +406,10 @@ export function update(g, dt) {
       if (u.targetId && u.order === "attack" && ![...g.units, ...g.buildings].some(v => v.id === u.targetId && v.hp > 0)) finishOrder(u);
       else if (move(g, u, explicit ? nearestStand(g, explicit, u.type) : u.target, dt)) finishOrder(u);
     }
-    if (u.team === "gold" && u.order === "idle") {
-      u.order = "attack"; u.target = g.time < 35 ? { x: g.ores[3].x, y: g.ores[3].y } : { x: g.home.x, y: g.home.y };
-      if (g.time < 35 && distance(u, g.ores[3]) < 100) { u.order = "hold"; u.enemyHoldUntil = 35; }
+    if (u.team === "gold" && u.order === "idle" && g.time < 35) {
+      u.order = "attack"; u.target = { x: g.ores[3].x, y: g.ores[3].y };
+      if (distance(u, g.ores[3]) < 100) u.order = "hold";
     }
-    if (u.team === "gold" && u.enemyHoldUntil && g.time >= u.enemyHoldUntil) { u.order = "attack"; u.target = { x: g.home.x, y: g.home.y }; u.enemyHoldUntil = null; }
   }
   for (let i = 0; i < g.units.length; i++) for (let j = i + 1; j < g.units.length; j++) {
     const a = g.units[i], b = g.units[j]; if ((TYPES[a.type].domain || "ground") !== (TYPES[b.type].domain || "ground")) continue;
@@ -354,5 +429,8 @@ export function restoreGame(json) {
   if (g.units.some(u => !TYPES[u.type] || !Number.isFinite(u.x) || !Number.isFinite(u.y)) || g.buildings.some(b => !BUILDINGS[b.type])) throw new Error("存档包含无效单位或建筑");
   g.home = g.buildings.find(b => b.id === "home"); g.enemyBase = g.buildings.find(b => b.id === "base"); g.ore = g.ores[0];
   if (!g.home || !g.enemyBase || !g.ore) throw new Error("存档缺少对局数据");
+  // Existing version-2 saves retain their battlefield; new AI state receives safe defaults.
+  if (!Number.isFinite(g.enemyCredits)) g.enemyCredits = 360;
+  if (!Number.isFinite(g.enemyThinkAt)) g.enemyThinkAt = Math.max(35, g.time + 3);
   g.paused = true; refreshVisibility(g); message(g, "存档已载入，战术暂停中。"); return g;
 }

@@ -76,6 +76,7 @@ export function App() {
       if (k === "v") api.current?.tactical();
       if (k === "f") command("attack"); if (k === "p") command("patrol"); if (k === "g") command("guard");
       if (k === "x") command("idle");
+      if (k === "t") command("retreat");
       if (k === "r") { if (modeRef.current?.kind === "build") setMode({ ...modeRef.current, rotation: (modeRef.current.rotation || 0) + Math.PI / 2 }); else command("hold"); }
       if (k === "z") ability("scan"); if (k === "c") ability("overcharge");
       if (k === "y") setMode({ kind: "rally", id: buildingRef.current });
@@ -116,6 +117,10 @@ export function App() {
         <div className="objective"><Target size={17} /><div>摧毁敌方指挥中心<small>北部高地 · 需要侦察</small></div><span>{baseKnown ? baseHp + "%" : "未知"}</span></div>
         <div className="progress amber"><span style={{ width: (baseKnown ? baseHp : 100) + "%" }} /></div>
         <div className={"sub-objective " + (e.controlled >= 2 ? "complete" : "")}><Check size={15} /> 控制两处矿区 <span>{Math.min(2, e.controlled)}/2</span></div>
+        <div className="enemy-logistics">{[["enemy-factory", "压制地面增援", "摧毁工厂：增援上限降至 2 支，间隔延长至 75 秒"], ["enemy-airfield", "切断空军增援", "摧毁空军基地：敌军无法再增援战机"]].map(([id, label, hint]) => {
+          const facility = state.buildings.find(b => b.id === id);
+          return facility && <button key={id} title={hint} onClick={() => api.current?.focus(facility.x, facility.y)} className={facility.hp <= 0 ? "complete" : ""}><span>{facility.hp <= 0 ? <Check /> : <Target />}{label}</span><small>{facility.hp <= 0 ? "已摧毁" : isVisible(state, facility) ? Math.ceil(facility.hp / facility.maxHp * 100) + "%" : "待侦察"}</small></button>;
+        })}</div>
         <div className="wave-info">敌军增援 <b>{formatTime(Math.max(0, state.waveAt - state.time))}</b></div>
         <button className="assault" onClick={() => { const ids = troops.filter(u => u.type !== "harvester" && u.type !== "boat").map(u => u.id); select(ids); issueOrder(game.current, ids, "attack", { x: state.enemyBase.x - 100, y: state.enemyBase.y + 100 }); }}>向北部高地推进 <NavigationArrow size={13} /></button>
       </div>
@@ -151,7 +156,7 @@ export function App() {
             <div className="unit-cards">{(chosen.length ? chosen : troops).map(u => <button key={u.id} aria-label={"选择" + TYPES[u.type].name + " " + u.id} title={TYPES[u.type].name + " · " + Math.ceil(u.hp) + "/" + u.maxHp + " HP · " + ORDERS[u.order]} className={"unit-card " + (selected.includes(u.id) ? "selected" : "")} onClick={() => select([u.id])}>
               <Portrait type={u.type} /><span>{TYPES[u.type].name}</span><div className="progress"><span style={{ width: u.hp / u.maxHp * 100 + "%" }} /></div><small>{ORDERS[u.order]}{u.pending.length ? " +" + u.pending.length : ""}{u.type === "harvester" ? " " + u.cargo + "/80" : ""}</small>
             </button>)}</div>
-            <div className="selection-caption"><span>{chosen.length === 1 ? Math.ceil(chosen[0].hp) + "/" + chosen[0].maxHp + " HP · 射程 " + TYPES[chosen[0].type].range : "Shift 连续下令 · Ctrl/⌘ 数字保存编队"}</span><button onClick={all}>选择全部战斗单位 <kbd>1</kbd></button></div>
+            <div className="selection-caption"><span>{chosen.length === 1 ? Math.ceil(chosen[0].hp) + "/" + chosen[0].maxHp + " HP · 射程 " + TYPES[chosen[0].type].range : "Shift 连续下令 · Ctrl/⌘ 数字保存编队"}</span><button disabled={!chosen.some(u => u.hp < u.maxHp) || !!state.result} title="返回对应生产设施；脱战 4 秒后每秒恢复 24 HP，每 8 HP 消耗 1 合金。新指令可取消维修。" onClick={() => command("retreat")}>撤回维修 <kbd>T</kbd></button><button onClick={all}>全选战斗单位 <kbd>1</kbd></button></div>
           </>}
           {panel === "production" && <>
             <div className="producer-toolbar"><label>生产设施 <select aria-label="选择生产设施" value={selectedBuilding?.id || ""} onChange={ev => { buildingRef.current = ev.target.value; setBuildingId(ev.target.value); }}>
@@ -174,7 +179,7 @@ export function App() {
           </button>)}</div>}
           {panel === "resources" && <div className="ore-cards">{state.ores.map(o => <article key={o.id}>
             <button className="ore-heading" onClick={() => api.current?.focus(o.x, o.y)}><Diamond /><b>{o.name}</b><span className={o.team || ""}>{!isVisible(state, o) ? "待侦察" : o.contested ? "争夺中" : o.team === "blue" ? "已控制" : o.team === "gold" ? "敌方控制" : "中立"}</span></button>
-            <small>驻军收入 +18 晶矿 / +4 合金 · 每 3s</small>
+            <small>驻军 +18 晶矿 / +4 合金 · 敌军占矿会扩军</small>
             <div><button onClick={() => { issueOrder(game.current, selectedRef.current, "move", { x: o.x + 65, y: o.y + 40 }); refresh(); }}>派驻部队</button><button onClick={() => { const ids = game.current.units.filter(u => u.type === "harvester" && u.team === "blue").map(u => u.id); issueOrder(game.current, ids, "harvest", o); refresh(); }}>采矿车运输</button></div>
           </article>)}</div>}
           {panel === "tech" && <div className="tech-cards">{Object.entries(TECHS).map(([id, t]) => {
@@ -206,8 +211,8 @@ export function App() {
       <div className="manual">
         <div><b>01 · 调度与侦察</b><p>左键选择、拖动框选，右键下令。Shift 追加路径；Ctrl/⌘ + 数字保存编队。扫描揭示迷雾，战机可越过湖泊。</p></div>
         <div><b>02 · 建设与经济</b><p>「建设」选择建筑，绿影可放置、红影不可放置，R 旋转。驻军控制矿点获得收入；采矿车额外运输。船坞建在西北湖岸。</p></div>
-        <div><b>03 · 生产与战术</b><p>每座建筑独立生产，可设集结点、取消退款。人口由设施提供，低供电减慢生产。「科技」升级全军，超载强化火力。</p></div>
-        <div><b>04 · 操作与存档</b><p>WASD 平移，H 回基地，V 俯视，空格暂停。F 攻击，P 巡逻，G 护卫，X 停止，Z 扫描。顶部可保存、载入和切换音效。</p></div>
+        <div><b>03 · 压制与维修</b><p>敌军占矿获得扩军资金，并派兵争夺矿区。摧毁敌方工厂可削弱、延缓增援，摧毁空军基地可切断战机。残血部队按 T 返回对应生产设施，脱战 4 秒后消耗合金维修。</p></div>
+        <div><b>04 · 生产与指挥</b><p>每座设施独立生产，可设集结点、取消退款。低供电减慢生产；科技和超载强化全军。F 点击敌人集火，P 巡逻，G 护卫；空格暂停、WASD 平移。顶部保存和载入对局。</p></div>
       </div><button className="primary" disabled={!ready} onClick={enter}>{ready ? "进入战场" : "战场载入中…"}<NavigationArrow /></button>
     </section></div>}
     {state.result && <div className="modal-backdrop"><section className="modal result"><Flag size={46} weight="duotone" /><span className="eyebrow">OPERATION COMPLETE</span><h2>{state.result === "victory" ? "区域已控制" : "行动失利"}</h2><p>{state.result === "victory" ? "赤砂指挥中心已摧毁，曙光行动完成。" : "联盟指挥中心已失联，重整部队再次出击。"}</p><div className="result-stats"><span><b>{formatTime(state.time)}</b>任务用时</span><span><b>{state.kills}</b>击毁目标</span><span><b>{state.mined}</b>运输晶矿</span></div><button className="primary" onClick={restart}><ArrowCounterClockwise />重新部署</button></section></div>}

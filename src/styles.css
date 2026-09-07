@@ -1139,6 +1139,13 @@ kbd {
 .mission-divider { margin: 12px 0; }
 .mission .wave-info { margin-top: 12px; }
 .mission .assault { margin-top: 8px; }
+.enemy-logistics { display: grid; gap: 6px; margin-top: 10px; }
+.enemy-logistics button { display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%; padding: 6px 0; background: transparent; color: #b7c8cd; border: 0; border-bottom: 1px solid #ffffff12; font: inherit; font-size: 12px; text-align: left; }
+.enemy-logistics button span { display: flex; align-items: center; gap: 6px; }
+.enemy-logistics svg { width: 13px; height: 13px; flex-shrink: 0; }
+.enemy-logistics small { font-size: 12px; white-space: nowrap; color: #d6af78; }
+.enemy-logistics .complete, .enemy-logistics .complete small { color: #8bceb3; }
+.selection-caption button:disabled { opacity: .4; cursor: default; }
 .topbar { padding: 0 20px; gap: 18px; height: 70px; }
 .brand { min-width: 225px; }
 .brand strong { font-size: 15px; letter-spacing: 1px; }
@@ -1166,7 +1173,8 @@ kbd {
 .unit-card img { height: 58px; }
 .unit-card > span { font-size: 11px; margin: 5px 0 7px; }
 .unit-card > small { display: block; font-size: 10px; color: #83b0ba; margin-top: 5px; }
-.selection-caption { font-size: 10px; margin-top: 9px; gap: 10px; }
+.selection-caption { font-size: 10px; margin-top: 9px; gap: 10px; flex-wrap: wrap; }
+.selection-caption > span { flex: 1 1 150px; min-width: 0; }
 .selection-caption button { font-size: 10px; white-space: nowrap; }
 .order-grid { grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 12px; }
 .order-grid button { height: 48px; flex-direction: row; gap: 6px; }
