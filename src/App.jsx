@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { Crosshair, Diamond, Lightning, UsersThree, Pause, Play, ArrowCounterClockwise, Plus, Minus, House, Target, ShieldChevron, NavigationArrow, Flag, Factory, Info, X, ArrowsOut, Check, Mouse, GlobeHemisphereWest, Wrench, FloppyDisk, FolderOpen, SpeakerHigh, SpeakerSlash, Binoculars, CirclesThreePlus, Path, HandPalm, Atom, Anchor, AirplaneTilt } from "@phosphor-icons/react";
 import { Battlefield } from "./Battlefield.jsx";
-import { createGame, issueOrder, enqueue, TYPES, BUILDINGS, TECHS, ABILITIES, ORDERS, economy, productionReason, cancelProduction, repairBuilding, startResearch, activateAbility, serializeGame, restoreGame, message, isVisible, isExplored, isWater } from "./engine.js";
+import { createGame, issueOrder, enqueue, TYPES, BUILDINGS, TECHS, ABILITIES, ORDERS, economy, productionReason, cancelProduction, repairBuilding, startResearch, activateAbility, serializeGame, restoreGame, message, isVisible, isExplored, isWater, worldFor, fogFor, MAP_PRESETS } from "./engine.js";
 const formatTime = t => Math.floor(t / 60).toString().padStart(2, "0") + ":" + Math.floor(t % 60).toString().padStart(2, "0");
 const unitImage = type => type === "aircraft" ? "/assets/earth2/Thumb_Aircraft.png" : "/assets/" + type + ".png";
 const buildImage = type => BUILDINGS[type].asset ? "/assets/earth2/Thumb_" + BUILDINGS[type].asset + ".png" : null;
@@ -10,35 +10,49 @@ function Portrait({ type, building = false }) {
   if (type === "boat" || type === "shipyard") return <Anchor className="naval-portrait" weight="duotone" />;
   return <img src={building ? buildImage(type) : unitImage(type)} alt="" />;
 }
-function Radar({ state, api, game, selectedRef }) {
-  const canvas = useRef(null);
+function Radar({ state, api, game, selectedRef, large = false }) {
+  const canvas = useRef(null), world = worldFor(state);
   useEffect(() => {
-    const c = canvas.current, ctx = c.getContext("2d"), w = c.width, h = c.height;
-    ctx.fillStyle = "#425443"; ctx.fillRect(0, 0, w, h);
-    for (let y = 0; y < 23; y++) for (let x = 0; x < 40; x++) {
-      if (isWater(x * 40 + 20, y * 40 + 20)) { ctx.fillStyle = "#287886"; ctx.fillRect(x * w / 40, y * 40 * h / 900, w / 40 + 1, 40 * h / 900 + 1); }
-      if (state.fog && !state.visible[y * 40 + x]) { ctx.fillStyle = state.explored[y * 40 + x] ? "#0b181c80" : "#081318ed"; ctx.fillRect(x * w / 40, y * 40 * h / 900, w / 40 + 1, 40 * h / 900 + 1); }
-    }
+    const c = canvas.current, ctx = c.getContext("2d"), w = c.width, h = c.height, grid = fogFor(state), sx = w / world.w, sy = h / world.h;
+    ctx.fillStyle = "#737b4c"; ctx.fillRect(0, 0, w, h);
+    for (const forest of world.forests || []) { ctx.fillStyle = "#35513e"; ctx.beginPath(); ctx.ellipse(forest.x * sx, forest.y * sy, forest.rx * sx, forest.ry * sy, 0, 0, Math.PI * 2); ctx.fill(); }
+    for (const road of world.roads || []) { ctx.strokeStyle = "#b9ad81"; ctx.lineWidth = Math.max(1, road.width * sx); ctx.beginPath(); road.points.forEach((p, i) => i ? ctx.lineTo(p.x * sx, p.y * sy) : ctx.moveTo(p.x * sx, p.y * sy)); ctx.stroke(); }
+    for (const lake of world.water || []) { ctx.fillStyle = "#79a49a"; ctx.beginPath(); ctx.ellipse(lake.x * sx, lake.y * sy, lake.rx * sx * 1.04, lake.ry * sy * 1.04, lake.rotation || 0, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = "#2d929b"; ctx.beginPath(); ctx.ellipse(lake.x * sx, lake.y * sy, lake.rx * sx, lake.ry * sy, lake.rotation || 0, 0, Math.PI * 2); ctx.fill(); }
+    for (const obstacle of world.obstacles || []) { ctx.fillStyle = "#c1c0a2"; ctx.beginPath(); ctx.arc(obstacle.x * sx, obstacle.y * sy, Math.max(1.5, obstacle.radius * sx), 0, Math.PI * 2); ctx.fill(); }
+    for (let y = 0; y < grid.rows; y++) for (let x = 0; x < grid.cols; x++) if (state.fog && !state.visible[y * grid.cols + x]) { ctx.fillStyle = state.explored[y * grid.cols + x] ? "#0b181c70" : "#081318df"; ctx.fillRect(x * grid.cell * sx, y * grid.cell * sy, grid.cell * sx + 1, grid.cell * sy + 1); }
+    ctx.strokeStyle = "#badbc51c"; ctx.lineWidth = 1;
+    for (let i = 1; i < 8; i++) { ctx.beginPath(); ctx.moveTo(i * w / 8, 0); ctx.lineTo(i * w / 8, h); ctx.stroke(); }
+    for (let i = 1; i < 5; i++) { ctx.beginPath(); ctx.moveTo(0, i * h / 5); ctx.lineTo(w, i * h / 5); ctx.stroke(); }
     for (const o of state.ores) if (isExplored(state, o)) {
-      ctx.fillStyle = isVisible(state, o) && o.team === "blue" ? "#7de0f0" : isVisible(state, o) && o.team === "gold" ? "#ed9f6a" : "#dfb77d";
-      ctx.save(); ctx.translate(o.x / 1600 * w, o.y / 900 * h); ctx.rotate(Math.PI / 4); ctx.fillRect(-3, -3, 6, 6); ctx.restore();
+      ctx.fillStyle = isVisible(state, o) && o.team === "blue" ? "#7de0f0" : isVisible(state, o) && o.team === "gold" ? "#ed9f6a" : "#e4bb6a";
+      ctx.save(); ctx.translate(o.x * sx, o.y * sy); ctx.rotate(Math.PI / 4); const size = large ? 5 : 3; ctx.fillRect(-size, -size, size * 2, size * 2); ctx.restore();
+      if (large) { ctx.font = "13px sans-serif"; ctx.fillStyle = "#f1e8c7"; ctx.textAlign = "center"; ctx.fillText(o.name, o.x * sx, o.y * sy + 22); }
     }
-    for (const b of state.buildings) if (b.hp > 0 && isVisible(state, b)) { ctx.fillStyle = b.team === "blue" ? "#b0eaf6" : "#ff9c71"; ctx.fillRect(b.x / 1600 * w - 3, b.y / 900 * h - 3, 6, 6); }
-    for (const u of state.units) if (isVisible(state, u)) {
-      ctx.fillStyle = u.team === "blue" ? "#75dfff" : "#ffa172"; ctx.beginPath(); ctx.arc(u.x / 1600 * w, u.y / 900 * h, selectedRef.current.includes(u.id) ? 2.5 : 1.7, 0, Math.PI * 2); ctx.fill();
-    }
-  }, [state]);
-  return <button className="minimap" aria-label="战术地图：左键定位，右键移动所选部队" onClick={e => { const r = e.currentTarget.getBoundingClientRect(); api.current?.focus((e.clientX - r.left) / r.width * 1600, (e.clientY - r.top) / r.height * 900); }} onContextMenu={e => { e.preventDefault(); const r = e.currentTarget.getBoundingClientRect(); issueOrder(game.current, selectedRef.current, "move", { x: (e.clientX - r.left) / r.width * 1600, y: (e.clientY - r.top) / r.height * 900 }, e.shiftKey); }}>
-    <canvas width="400" height="225" ref={canvas} />
+    for (const b of state.buildings) if (b.hp > 0 && isVisible(state, b)) { ctx.fillStyle = b.team === "blue" ? "#b0eaf6" : "#ff9c71"; const size = b.type === "headquarters" ? 5 : 3; ctx.fillRect(b.x * sx - size, b.y * sy - size, size * 2, size * 2); }
+    for (const u of state.units) if (isVisible(state, u)) { ctx.fillStyle = u.team === "blue" ? "#75dfff" : "#ffa172"; ctx.beginPath(); ctx.arc(u.x * sx, u.y * sy, selectedRef.current.includes(u.id) ? 3 : 2, 0, Math.PI * 2); ctx.fill(); }
+    if (state.cameraView) { const v = state.cameraView; ctx.strokeStyle = "#d9ffffbb"; ctx.lineWidth = 1.5; ctx.strokeRect((v.x - v.width / 2) * sx, (v.y - v.height / 2) * sy, v.width * sx, v.height * sy); }
+    ctx.fillStyle = "#e7f1d9"; ctx.font = (large ? "14" : "11") + "px sans-serif"; ctx.textAlign = "left"; ctx.fillText("N ↑", 10, 18);
+  }, [state, large, world]);
+  const point = e => { const r = e.currentTarget.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * world.w, y: (e.clientY - r.top) / r.height * world.h }; };
+  return <button className={"minimap " + (large ? "strategic-map" : "")} aria-label={large ? "战略地图：左键定位，右键移动部队" : "战术地图：左键定位，右键移动所选部队"} onClick={e => { const p = point(e); api.current?.focus(p.x, p.y); }} onContextMenu={e => { e.preventDefault(); issueOrder(game.current, selectedRef.current, "move", point(e), e.shiftKey); }}>
+    <canvas width={large ? 1120 : 400} height={large ? 630 : 225} ref={canvas} />
   </button>;
 }
 export function App() {
   const game = useRef(null), selectedRef = useRef([1, 2, 3]), api = useRef(null), modeRef = useRef(null), buildingRef = useRef("factory-1");
   if (!game.current) { game.current = createGame(); game.current.paused = true; }
-  const [state, setState] = useState(game.current), [selected, setSelected] = useState([1, 2, 3]), [panel, setPanel] = useState("units"),
-    [help, setHelp] = useState(true), [ready, setReady] = useState(false), [error, setError] = useState(""), [mode, setModeState] = useState(null), [buildingId, setBuildingId] = useState("factory-1");
+  const [state, setState] = useState(game.current), [selected, setSelected] = useState([1, 2, 3]), [panel, setPanel] = useState("buildings"),
+    [help, setHelp] = useState(true), [ready, setReady] = useState(false), [error, setError] = useState(""), [mode, setModeState] = useState(null), [buildingId, setBuildingId] = useState("factory-1"), [mapSaveError, setMapSaveError] = useState(""), [mapOpen, setMapOpen] = useState(false), [mapPicker, setMapPicker] = useState(false), [mapChoice, setMapChoice] = useState(worldFor(game.current).id);
+  const modalRef = useRef(null);
+  modalRef.current = { help, mapOpen, mapPicker, blocked: help || mapOpen || mapPicker };
   const refresh = () => setState({ ...game.current });
   const setMode = value => { modeRef.current = value; setModeState(value); };
+  useEffect(() => {
+    if (!mapOpen && !mapPicker) return;
+    const current = game.current, previousPause = current.paused;
+    current.paused = true; refresh();
+    return () => { if (game.current === current) { current.paused = previousPause; refresh(); } };
+  }, [mapOpen, mapPicker]);
   const select = ids => { selectedRef.current = ids; setSelected(ids); setPanel("units"); };
   const inspect = id => { if (id === "resources") setPanel(id); else { buildingRef.current = id; setBuildingId(id); setPanel("production"); } };
   const all = () => select(game.current.units.filter(u => u.team === "blue" && u.type !== "harvester").map(u => u.id));
@@ -50,11 +64,20 @@ export function App() {
     } else { setMode(null); issueOrder(game.current, selectedRef.current, order); }
     refresh();
   };
-  const pause = () => { if (!game.current.result) { game.current.paused = !game.current.paused; refresh(); } };
-  const restart = () => { game.current = createGame(); select([1, 2, 3]); setMode(null); buildingRef.current = "factory-1"; setBuildingId("factory-1"); api.current?.reset(); refresh(); };
+  const pause = () => { if (!modalRef.current.blocked && !game.current.result) { game.current.paused = !game.current.paused; refresh(); } };
+  const restart = (id = worldFor(game.current).id) => { game.current = createGame(typeof id === "string" ? id : worldFor(game.current).id); select([1, 2, 3]); setMode(null); buildingRef.current = "factory-1"; setBuildingId("factory-1"); api.current?.reset(); refresh(); };
+  const deployMap = () => { try { localStorage.setItem(SAVE_KEY, serializeGame(game.current)); } catch { setMapSaveError("无法自动保存：本地存储已满或被禁用。当前对局已保留，请释放空间后重试。"); return; } restart(mapChoice); setMapPicker(false); setMapOpen(false); setHelp(false); setPanel("buildings"); };
   const save = () => { try { localStorage.setItem(SAVE_KEY, serializeGame(game.current)); message(game.current, "对局已保存到此浏览器。"); } catch { message(game.current, "存档失败：浏览器存储不可用。"); } refresh(); };
   const load = () => {
-    try { const data = localStorage.getItem(SAVE_KEY); if (!data) throw new Error("尚无本地存档"); game.current = restoreGame(data); setMode(null); select(game.current.units.filter(u => u.team === "blue").slice(0, 3).map(u => u.id)); api.current?.reset(); }
+    try {
+      const data = localStorage.getItem(SAVE_KEY); if (!data) throw new Error("尚无本地存档");
+      game.current = restoreGame(data); setMode(null);
+      select(game.current.units.filter(u => u.team === "blue").slice(0, 3).map(u => u.id));
+      const friendly = game.current.buildings.filter(b => b.team === "blue" && b.hp > 0);
+      const producer = friendly.find(b => b.type === "factory") || friendly[0];
+      buildingRef.current = producer?.id ?? null; setBuildingId(buildingRef.current);
+      api.current?.reset();
+    }
     catch (e) { message(game.current, e.message); } refresh();
   };
   const ability = id => { if (id === "scan") setMode({ kind: "scan" }); else activateAbility(game.current, id); refresh(); };
@@ -62,11 +85,13 @@ export function App() {
     const key = e => {
       if (e.repeat || /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
       const k = e.key.toLowerCase(), modifier = e.ctrlKey || e.metaKey;
+      if (k === "escape") { setMode(null); setHelp(false); setMapOpen(false); setMapPicker(false); return; }
+      if (e.code === "Tab" && e.target === document.body && !modalRef.current.help && !modalRef.current.mapPicker) { e.preventDefault(); setMapOpen(open => !open); return; }
+      if (modalRef.current.blocked) return;
       if (modifier && k === "s") { e.preventDefault(); save(); return; }
       if (modifier && k === "l") { e.preventDefault(); load(); return; }
       if (/^[1-9]$/.test(k) && modifier) { e.preventDefault(); game.current.groups[k] = [...selectedRef.current]; message(game.current, "编队 " + k + " 已保存。"); refresh(); return; }
       if (modifier) return;
-      if (k === "escape") { setMode(null); setHelp(false); return; }
       if (e.code === "Space") { e.preventDefault(); pause(); }
       if (/^[1-9]$/.test(k)) {
         if (game.current.groups[k]?.length) select(game.current.groups[k].filter(id => game.current.units.some(u => u.id === id)));
@@ -86,21 +111,21 @@ export function App() {
     window.addEventListener("keydown", key); return () => window.removeEventListener("keydown", key);
   }, []);
   const chosen = state.units.filter(u => selected.includes(u.id) && u.team === "blue"), troops = state.units.filter(u => u.team === "blue"),
-    e = economy(state), selectedBuilding = state.buildings.find(b => b.id === buildingId && b.hp > 0),
+    world = worldFor(state), e = economy(state), selectedBuilding = state.buildings.find(b => b.id === buildingId && b.hp > 0),
     baseKnown = isVisible(state, state.enemyBase), baseHp = Math.max(0, Math.round(state.enemyBase.hp / state.enemyBase.maxHp * 100)),
     activeBuildings = state.buildings.filter(b => b.team === "blue" && b.hp > 0);
   const enter = () => { setHelp(false); game.current.paused = false; api.current?.unlockAudio(); refresh(); };
   const modes = { move: "移动：点击目的地", attack: "攻击：点击地面推进，或点击敌军集火", patrol: "巡逻：点击另一端，部队将往返警戒", guard: "护卫：点击一支友军或友方建筑", rally: "集结点：点击生产完成后的目的地", scan: "战术扫描：点击要揭示的区域" };
   return <main className="game-shell">
     <header className="topbar">
-      <div className="brand"><Crosshair weight="duotone" size={29} /><div><strong>FRONTIER<span> / </span>前线指令</strong><small>EARTH OPERATIONS · SECTOR 07</small></div></div>
+      <div className="brand"><Crosshair weight="duotone" size={29} /><div><strong>FRONTIER<span> / </span>前线指令</strong><small>EARTH OPERATIONS · {world.name}</small></div></div>
       <div className="resources">
         <div><Diamond weight="duotone" /><span><b data-testid="credits">{Math.floor(state.credits).toLocaleString()}</b><small>晶矿 +{e.credits}/3s</small></span></div>
         <div><CirclesThreePlus weight="duotone" /><span><b>{Math.floor(state.alloy).toLocaleString()}</b><small>合金 +{e.alloy}/3s</small></span></div>
         <div className={e.demand > e.supply ? "low-power" : ""} title={"供电 " + e.supply + " / 负载 " + e.demand + "；供电不足时生产减半"}><Lightning weight="duotone" /><span><b>{e.energy}%</b><small>{e.demand > e.supply ? "低电量 · 生产减半" : "电力余量"}</small></span></div>
         <div><UsersThree weight="duotone" /><span><b>{e.population}<i> / {e.cap}</i></b><small>部队 / 人口上限</small></span></div>
       </div>
-      <div className="top-actions"><span className="clock">{formatTime(state.time)}</span>
+      <div className="top-actions"><button className="map-switch" onClick={() => { setMapChoice(MAP_PRESETS.some(p => p.id === world.id) ? world.id : MAP_PRESETS[0].id); setMapSaveError(""); setMapPicker(true); }}><GlobeHemisphereWest />{world.name}</button><span className="clock">{formatTime(state.time)}</span>
         <button className="icon-button" onClick={pause} title="空格：暂停 / 继续" aria-label={state.paused ? "继续游戏" : "暂停游戏"}>{state.paused ? <Play /> : <Pause />}</button>
         <button className="icon-button" onClick={save} title="保存对局 · Ctrl/⌘ S" aria-label="保存对局"><FloppyDisk /></button>
         <button className="icon-button" onClick={load} title="载入对局 · Ctrl/⌘ L" aria-label="载入对局"><FolderOpen /></button>
@@ -112,9 +137,9 @@ export function App() {
       <Battlefield game={game} selectedRef={selectedRef} onSelect={select} onFrame={setState} onReady={(ok, err) => { setReady(ok); if (err) setError(err); }} apiRef={api} onInspect={inspect} modeRef={modeRef} onMode={setMode} />
       <div className="mission panel">
         <div className="eyebrow"><span className="live-dot" /> OPERATION DAWN <span>07</span></div>
-        <h1>曙光行动</h1><p>争夺矿区，建立陆海空优势。</p>
+        <h1>曙光行动</h1><p>{world.name} · {world.w / 10} × {world.h / 10} 战区</p>
         <div className="mission-divider" />
-        <div className="objective"><Target size={17} /><div>摧毁敌方指挥中心<small>北部高地 · 需要侦察</small></div><span>{baseKnown ? baseHp + "%" : "未知"}</span></div>
+        <div className="objective"><Target size={17} /><div>摧毁敌方指挥中心<small>敌方后方 · 需要侦察</small></div><span>{baseKnown ? baseHp + "%" : "未知"}</span></div>
         <div className="progress amber"><span style={{ width: (baseKnown ? baseHp : 100) + "%" }} /></div>
         <div className={"sub-objective " + (e.controlled >= 2 ? "complete" : "")}><Check size={15} /> 控制两处矿区 <span>{Math.min(2, e.controlled)}/2</span></div>
         <div className="enemy-logistics">{[["enemy-factory", "压制地面增援", "摧毁工厂：增援上限降至 2 支，间隔延长至 75 秒"], ["enemy-airfield", "切断空军增援", "摧毁空军基地：敌军无法再增援战机"]].map(([id, label, hint]) => {
@@ -124,7 +149,7 @@ export function App() {
         <div className="wave-info">敌军增援 <b>{formatTime(Math.max(0, state.waveAt - state.time))}</b></div>
         <button className="assault" onClick={() => { const ids = troops.filter(u => u.type !== "harvester" && u.type !== "boat").map(u => u.id); select(ids); issueOrder(game.current, ids, "attack", { x: state.enemyBase.x - 100, y: state.enemyBase.y + 100 }); }}>向北部高地推进 <NavigationArrow size={13} /></button>
       </div>
-      <div className="sector"><GlobeHemisphereWest size={15} /> 林海边境 <span>迷雾侦察 · 联合作战</span></div>
+      <div className="sector"><GlobeHemisphereWest size={15} /> {world.name}<span>{state.ores.length} 处矿区 · 联合作战</span><button onClick={() => setMapOpen(true)}>战略地图 <kbd>Tab</kbd></button></div>
       <div className="world-labels" aria-hidden="true">
         {Array.isArray(state.labels) && state.labels.filter(p => p.visible).map(p => <div key={p.id} className={"world-label " + (p.team === "gold" ? "base" : p.type ? "home" : "ore")} style={{ left: p.x, top: p.y - 15 }}>
           {p.type ? BUILDINGS[p.type].name : p.name}<span>{p.type ? p.remaining > 0 ? "施工 " + Math.ceil(p.remaining) + "s" : Math.ceil(p.hp) + " HP" : !p.known ? "待侦察" : p.contested ? "争夺中" : p.team === "blue" ? "我方控制" : p.team === "gold" ? "敌方控制" : "中立矿区"}</span>
@@ -141,9 +166,9 @@ export function App() {
     </section>
     <footer className="command-deck">
       <section className="radar-panel">
-        <div className="deck-heading"><span>战术地图</span><small>LIVE INTEL</small></div>
+        <div className="deck-heading"><span>战术地图</span><button className="expand-map" onClick={() => setMapOpen(true)} aria-label="展开战略地图"><ArrowsOut /></button></div>
         <Radar state={state} api={api} game={game} selectedRef={selectedRef} />
-        <div className="map-caption"><span className="live-dot" /> 矿区 {e.controlled}/4 <span>右键下令</span></div>
+        <div className="map-caption"><span className="live-dot" /> 矿区 {e.controlled}/{state.ores.length} <span>右键下令</span></div>
         <div className="group-strip">{[1, 2, 3, 4].map(n => <button key={n} title={"Ctrl/⌘ " + n + " 保存编队；点击调用"} onClick={() => { const ids = state.groups[n]; if (ids?.length) select(ids.filter(id => troops.some(u => u.id === id))); else { game.current.groups[n] = [...selectedRef.current]; message(game.current, "编队 " + n + " 已保存。"); refresh(); } }}><kbd>{n}</kbd><span>{(state.groups[n] || []).filter(id => troops.some(u => u.id === id)).length || "—"}</span></button>)}</div>
       </section>
       <section className="selection-panel">
@@ -179,7 +204,7 @@ export function App() {
           </button>)}</div>}
           {panel === "resources" && <div className="ore-cards">{state.ores.map(o => <article key={o.id}>
             <button className="ore-heading" onClick={() => api.current?.focus(o.x, o.y)}><Diamond /><b>{o.name}</b><span className={o.team || ""}>{!isVisible(state, o) ? "待侦察" : o.contested ? "争夺中" : o.team === "blue" ? "已控制" : o.team === "gold" ? "敌方控制" : "中立"}</span></button>
-            <small>驻军 +18 晶矿 / +4 合金 · 敌军占矿会扩军</small>
+            <small>{o.contested ? "交火争夺中 · 收入暂停" : o.captureProgress > 0 && o.captureProgress < 1 ? "占领进度 " + Math.round(o.captureProgress * 100) + "%" : "控制 +" + (o.income || 18) + " 晶矿 / +4 合金"}</small>
             <div><button onClick={() => { issueOrder(game.current, selectedRef.current, "move", { x: o.x + 65, y: o.y + 40 }); refresh(); }}>派驻部队</button><button onClick={() => { const ids = game.current.units.filter(u => u.type === "harvester" && u.team === "blue").map(u => u.id); issueOrder(game.current, ids, "harvest", o); refresh(); }}>采矿车运输</button></div>
           </article>)}</div>}
           {panel === "tech" && <div className="tech-cards">{Object.entries(TECHS).map(([id, t]) => {
@@ -193,7 +218,8 @@ export function App() {
         </div>
       </section>
       <section className="orders-panel">
-        <div className="deck-heading"><span>战术指令</span><small>COMMAND</small></div>
+        <div className="deck-heading"><span>{chosen.length ? TYPES[chosen[0].type].name : "战术指令"}</span><small>{chosen.length ? chosen.length + " 支已选择" : "COMMAND"}</small></div>
+        {chosen.length > 0 && <div className="command-unit"><Portrait type={chosen[0].type} /><div><b>{Math.ceil(chosen.reduce((n,u) => n + u.hp, 0))}<small> / {chosen.reduce((n,u) => n + u.maxHp, 0)} HP</small></b><div className="progress"><span style={{width: chosen.reduce((n,u) => n + u.hp, 0) / chosen.reduce((n,u) => n + u.maxHp, 0) * 100 + "%"}} /></div><span>{chosen.length === 1 ? ORDERS[chosen[0].order] : "联合编队"} · {world.name}</span></div></div>}
         <div className="order-grid">
           {[["move", NavigationArrow, "移动"], ["attack", Crosshair, "攻击 F"], ["idle", HandPalm, "停止 X"], ["patrol", Path, "巡逻 P"], ["guard", ShieldChevron, "护卫 G"], ["hold", Flag, "驻守 R"]].map(([id, Icon, label]) => <button key={id} className={mode?.kind === id ? "active" : ""} onClick={() => command(id)} disabled={!chosen.length || !!state.result}><Icon /><span>{label}</span></button>)}
         </div>
@@ -210,10 +236,21 @@ export function App() {
       <h2>指挥官，欢迎来到前线。</h2><p>控制矿区、发展基地，带领陆海空部队摧毁敌方指挥中心。</p>
       <div className="manual">
         <div><b>01 · 调度与侦察</b><p>左键选择、拖动框选，右键下令。Shift 追加路径；Ctrl/⌘ + 数字保存编队。扫描揭示迷雾，战机可越过湖泊。</p></div>
-        <div><b>02 · 建设与经济</b><p>「建设」选择建筑，绿影可放置、红影不可放置，R 旋转。驻军控制矿点获得收入；采矿车额外运输。船坞建在西北湖岸。</p></div>
+        <div><b>02 · 建设与经济</b><p>「建设」选择建筑，绿影可放置、红影不可放置，R 旋转。驻军控制矿点获得收入；采矿车额外运输。船坞建在湖岸，舰艇控制水道。Tab 打开完整战略地图。</p></div>
         <div><b>03 · 压制与维修</b><p>敌军占矿获得扩军资金，并派兵争夺矿区。摧毁敌方工厂可削弱、延缓增援，摧毁空军基地可切断战机。残血部队按 T 返回对应生产设施，脱战 4 秒后消耗合金维修。</p></div>
-        <div><b>04 · 生产与指挥</b><p>每座设施独立生产，可设集结点、取消退款。低供电减慢生产；科技和超载强化全军。F 点击敌人集火，P 巡逻，G 护卫；空格暂停、WASD 平移。顶部保存和载入对局。</p></div>
+        <div><b>04 · 生产与指挥</b><p>每座设施独立生产，可设集结点、取消退款。低供电减慢生产；科技和超载强化全军。F 点击敌人集火，P 巡逻，G 护卫；空格暂停、WASD 平移。顶部可保存、载入并切换三大战区。</p></div>
       </div><button className="primary" disabled={!ready} onClick={enter}>{ready ? "进入战场" : "战场载入中…"}<NavigationArrow /></button>
+    </section></div>}
+    {mapOpen && <div className="modal-backdrop"><section className="modal map-modal" role="dialog" aria-modal="true" aria-label="战略地图">
+      <button className="close" onClick={() => setMapOpen(false)} aria-label="关闭战略地图"><X /></button><span className="eyebrow">THEATER OVERVIEW / {world.id}</span><h2>{world.name}</h2>
+      <div className="map-summary"><span>{world.w / 10} × {world.h / 10} 战区</span><span>{e.controlled} / {state.ores.length} 处矿区已控制</span><span>{troops.length} 支友军</span><span>战术暂停 · 左键定位 · 右键下令 · Esc 返回</span></div>
+      <Radar state={state} api={api} game={game} selectedRef={selectedRef} large />
+      <div className="map-legend"><span><i className="ally" />联盟部队</span><span><i className="enemy" />敌方部队</span><span><i className="mineral" />晶矿</span><span>白框：当前视野</span><button onClick={() => { api.current?.home(); setMapOpen(false); }}><House />返回基地</button><button onClick={() => { api.current?.tactical(); setMapOpen(false); }}><Binoculars />全境俯视</button></div>
+    </section></div>}
+    {mapPicker && <div className="modal-backdrop"><section className="modal map-picker" role="dialog" aria-modal="true" aria-label="选择战区">
+      <button className="close" onClick={() => setMapPicker(false)} aria-label="关闭选择战区"><X /></button><span className="eyebrow">OPERATION SELECT / EARTH FRONTIER</span><h2>选择下一片战场</h2><p>在不同地形中建设基地，争夺十二处资源节点。</p>
+      <div className="map-options">{MAP_PRESETS.map((preset, index) => <button key={preset.id} className={mapChoice === preset.id ? "selected" : ""} onClick={() => setMapChoice(preset.id)}><span className="map-number">0{index + 1}</span><div><h3>{preset.name}</h3><p>{preset.description}</p><small>{preset.w / 10} × {preset.h / 10} 战区 · 12 处晶矿</small></div><span>{mapChoice === preset.id ? <Check /> : <GlobeHemisphereWest />}</span></button>)}</div>
+      {mapSaveError && <p className="save-error" role="alert">{mapSaveError}</p>}<p className="save-hint">当前战局已暂停。部署前会自动保存，可通过顶部「载入」返回。</p><button className="primary" onClick={deployMap}><NavigationArrow />部署至 {MAP_PRESETS.find(p => p.id === mapChoice)?.name}</button>
     </section></div>}
     {state.result && <div className="modal-backdrop"><section className="modal result"><Flag size={46} weight="duotone" /><span className="eyebrow">OPERATION COMPLETE</span><h2>{state.result === "victory" ? "区域已控制" : "行动失利"}</h2><p>{state.result === "victory" ? "赤砂指挥中心已摧毁，曙光行动完成。" : "联盟指挥中心已失联，重整部队再次出击。"}</p><div className="result-stats"><span><b>{formatTime(state.time)}</b>任务用时</span><span><b>{state.kills}</b>击毁目标</span><span><b>{state.mined}</b>运输晶矿</span></div><button className="primary" onClick={restart}><ArrowCounterClockwise />重新部署</button></section></div>}
   </main>;

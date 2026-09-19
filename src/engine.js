@@ -1,4 +1,13 @@
-export const WORLD = { w: 1600, h: 900 };
+import { MAP_PRESETS, createWorld, mapPoint } from "./maps.js";
+export { MAP_PRESETS } from "./maps.js";
+export const WORLD = { w: 3200, h: 1800 };
+export const FOG = { cols: 80, rows: 45, cell: 40 };
+let activeWorld = createWorld();
+export const worldFor = g => g?.world || activeWorld;
+export const fogFor = g => ({ cols: Math.ceil(worldFor(g).w / 40), rows: Math.ceil(worldFor(g).h / 40), cell: 40 });
+function selectWorld(world) {
+  activeWorld = world; Object.assign(WORLD, { w: world.w, h: world.h }); Object.assign(FOG, fogFor({ world }));
+}
 export const TYPES = {
   tank: { name: "游骑兵坦克", hp: 240, speed: 72, range: 170, damage: 36, cost: 260, time: 5.8, producer: "factory", cooldown: 2.2 },
   infantry: { name: "先锋步兵", hp: 90, speed: 90, range: 115, damage: 12, cost: 90, time: 2.8, producer: "barracks", cooldown: 1.2 },
@@ -26,10 +35,27 @@ export const ABILITIES = {
 export const ORDERS = { idle: "待命", move: "移动", attack: "攻击", patrol: "巡逻", guard: "护卫", hold: "驻守", harvest: "采集", retreat: "撤回维修" };
 export const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
-export const isWater = (x, y) => x > 35 && y > 35 && x < 550 && y < 310 && ((x - 128) / 420) ** 2 + ((y + 18) / 312) ** 2 < 0.96;
-export function walkable(x, y, domain = "ground") {
-  if (x < 38 || x > 1562 || y < 38 || y > 862) return false;
-  return domain === "air" || (domain === "water" ? isWater(x, y) : !isWater(x, y));
+export function isWater(x, y, g) {
+  const world = worldFor(g);
+  if (world.id === "Legacy160") return x > 35 && y > 35 && x < 550 && y < 310 && ((x - 128) / 420) ** 2 + ((y + 18) / 312) ** 2 < 0.96;
+  return world.water.some(lake => {
+    const dx = x - lake.x, dy = y - lake.y, angle = lake.rotation || 0;
+    return ((dx * Math.cos(angle) + dy * Math.sin(angle)) / lake.rx) ** 2 + ((dy * Math.cos(angle) - dx * Math.sin(angle)) / lake.ry) ** 2 < 1;
+  });
+}
+export function walkable(x, y, domain = "ground", g) {
+  const world = worldFor(g), b = world.bounds;
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < b.minX || x > b.maxX || y < b.minY || y > b.maxY) return false;
+  if (domain === "air") return true;
+  if (domain === "water") return isWater(x, y, g);
+  return !isWater(x, y, g) && !world.obstacles.some(o => distance(o, { x, y }) < o.radius + 10);
+}
+export function onRoad(g, p) {
+  return worldFor(g).roads.some(road => road.points.slice(1).some((b, i) => {
+    const a = road.points[i], dx = b.x - a.x, dy = b.y - a.y;
+    const t = clamp(((p.x-a.x)*dx + (p.y-a.y)*dy) / (dx*dx + dy*dy || 1), 0, 1);
+    return Math.hypot(p.x-a.x-dx*t, p.y-a.y-dy*t) < road.width / 2;
+  }));
 }
 export function makeUnit(id, type, x, y, team = "blue") {
   return { id, type, x, y, team, hp: TYPES[type].hp, maxHp: TYPES[type].hp, order: "idle", target: null, targetId: null, cooldown: 0, cargo: 0, work: 0, path: [], pending: [] };
@@ -37,7 +63,8 @@ export function makeUnit(id, type, x, y, team = "blue") {
 function building(id, type, x, y, team = "blue") {
   return { id, type, x, y, team, hp: BUILDINGS[type].hp, maxHp: BUILDINGS[type].hp, remaining: 0, total: BUILDINGS[type].time, rally: null, repairing: false, rotation: 0 };
 }
-export function createGame() {
+export function createGame(mapId = MAP_PRESETS[0].id) {
+  const world = createWorld(typeof mapId === "object" ? mapId.mapId || mapId.id : mapId); selectWorld(world);
   const home = building("home", "headquarters", 265, 728), enemyBase = building("base", "headquarters", 1370, 150, "gold");
   const ores = [
     { id: "ore", name: "中央晶矿", x: 1020, y: 425, remaining: 8000 },
@@ -46,7 +73,7 @@ export function createGame() {
     { id: "north", name: "北部矿区", x: 1070, y: 185, remaining: 5000 },
   ].map(o => ({ ...o, team: null, contested: false }));
   const g = {
-    version: 2, time: 0, credits: 1800, alloy: 2400, mined: 0, kills: 0, nextId: 30, wave: 1, waveAt: 55,
+    version: 3, world, mapId: world.id, time: 0, credits: 1800, alloy: 2400, mined: 0, kills: 0, nextId: 30, wave: 1, waveAt: 55,
     units: [makeUnit(1, "tank", 620, 445), makeUnit(2, "tank", 690, 530), makeUnit(3, "tank", 760, 610),
       makeUnit(4, "infantry", 870, 555), makeUnit(5, "infantry", 925, 610), makeUnit(6, "infantry", 1010, 585),
       makeUnit(7, "harvester", 535, 620), makeUnit(8, "enemy", 1220, 310, "gold"), makeUnit(9, "enemy", 1335, 355, "gold"), makeUnit(10, "enemy", 1380, 270, "gold")],
@@ -56,6 +83,25 @@ export function createGame() {
     scans: [], fog: true, visible: [], explored: [], visibilityTimer: 0, incomeTimer: 3, effects: [], explosions: [],
     events: ["占领矿区获取收入，建造生产设施，摧毁敌方指挥中心。"], result: null, paused: false, marker: null, groups: {}, sound: true,
   };
+  if (world.id !== "Legacy160") {
+    Object.assign(home, world.spawns.blue); Object.assign(enemyBase, world.spawns.gold);
+    const placements = { "barracks-1": [470,1190], "factory-1": [890,1490], "airfield-1": [1200,1560], "enemy-factory": [2890,580], "enemy-airfield": [2420,290] };
+    for (const b of g.buildings) if (placements[b.id]) Object.assign(b, mapPoint(world, ...placements[b.id]));
+    const starts = [[980,1020],[1100,1130],[1230,1230],[1300,1120],[1380,1200],[1500,1160],[860,1220],[2380,610],[2570,650],[2660,470]];
+    g.units.forEach((u, i) => Object.assign(u, mapPoint(world, ...starts[i])));
+    const dock = building("shipyard-1", "shipyard", 0, 0); Object.assign(dock, mapPoint(world,world.id === "TwinLakes280" ? 1100 : 1010,world.id === "TwinLakes280" ? 440 : 330)); g.buildings.push(dock);
+    const boat = makeUnit(11,"boat",0,0); Object.assign(boat,mapPoint(world,840,420)); g.units.push(boat);
+    g.ores = [
+      ["ore","中央晶矿",1600,910,8000], ["west","翡翠湖东岸",1100,610,6000], ["south","南部矿区",1350,1300,6500], ["north","北部矿区",2110,610,6500],
+      ["shore","西侧矿谷",320,850,4500], ["outpost-west","西南前哨",750,1040,5000], ["ridge-west","北岭矿场",1150,270,6000], ["ridge-east","东北前哨",1780,330,7000],
+      ["outpost-east","东侧矿谷",2510,860,6000], ["crossing","南部通道",2100,1090,6000], ["flank-south","南岭矿场",1930,1570,7500], ["flank-east","远东富矿",2850,1630,7500],
+    ].map(([id,name,x,y,remaining]) => ({ id,name,...mapPoint(world,x,y),remaining,income:(["shore","outpost-west","ridge-west","ridge-east","outpost-east","flank-south"].includes(id) ? 30 : id === "ore" ? 22 : id === "flank-east" ? 20 : 18),team:null,contested:false,captureTeam:null,captureProgress:0 }));
+    g.ore = g.ores[0];
+    g.events = [world.name + " · 12 处晶矿。占领据点、建立前线生产线，摧毁敌方指挥中心。"];
+    g.units.filter(u => u.team === "gold").forEach((u,i) => { u.enemyRole = i < 2 ? "raider" : "assault"; });
+    [[12,"tank",2530,380],[13,"tank",2810,440],[14,"aircraft",2570,300]].forEach(([id,type,x,y]) => { const u=makeUnit(id,type,0,0,"gold"); Object.assign(u,mapPoint(world,x,y),{enemyRole:"defender",order:"hold"}); g.units.push(u); });
+    g.enemyThinkAt = 10;
+  }
   refreshVisibility(g); return g;
 }
 export function message(g, text) {
@@ -67,12 +113,12 @@ export function economy(g) {
   const cap = 12 + active.reduce((n, b) => n + BUILDINGS[b.type].cap, 0);
   const supply = 30 + active.reduce((n, b) => n + BUILDINGS[b.type].supply, 0);
   const demand = 8 + population * 3 + active.reduce((n, b) => n + BUILDINGS[b.type].demand, 0);
-  const controlled = g.ores.filter(o => o.team === "blue").length;
-  return { population, cap, supply, demand, energy: Math.round(clamp(1 - demand / supply, 0, 1) * 100), credits: 20 + controlled * 18, alloy: 2 + controlled * 4, controlled };
+  const mines = g.ores.filter(o => o.team === "blue" && !o.contested && o.remaining > 0), controlled = mines.length;
+  return { population, cap, supply, demand, energy: Math.round(clamp(1 - demand / supply, 0, 1) * 100), credits: 20 + mines.reduce((sum,o) => sum + (o.income || 18),0), alloy: 2 + controlled * 4, controlled };
 }
 export function canStand(g, x, y, type) {
   const domain = TYPES[type]?.domain || "ground";
-  return walkable(x, y, domain) && (domain !== "ground" || !g.buildings.some(b => b.hp > 0 && distance(b, { x, y }) < BUILDINGS[b.type].radius + 10));
+  return walkable(x, y, domain, g) && (domain !== "ground" || !g.buildings.some(b => b.hp > 0 && distance(b, { x, y }) < BUILDINGS[b.type].radius + 10));
 }
 function nearestStand(g, p, type) {
   if (canStand(g, p.x, p.y, type)) return { x: p.x, y: p.y };
@@ -83,7 +129,7 @@ function nearestStand(g, p, type) {
   return null;
 }
 function assign(u, task) {
-  Object.assign(u, task, { work: 0, path: [], pathGoal: null, stalled: 0 });
+  Object.assign(u, task, { work: 0, path: [], pathGoal: null, stalled: 0, retryPathAt: 0 });
   if (task.order === "patrol") { u.patrolStart = { x: u.x, y: u.y }; u.patrolEnd = task.target; u.patrolBack = false; }
 }
 function finishOrder(u) {
@@ -91,7 +137,7 @@ function finishOrder(u) {
   else { u.order = "idle"; u.target = null; u.targetId = null; u.path = []; }
 }
 export function issueOrder(g, ids, order, point, append = false) {
-  if (g.result) return false;
+  if (g.result || !Object.hasOwn(ORDERS, order) || (point && (!Number.isFinite(point.x) || !Number.isFinite(point.y)))) return false;
   const units = g.units.filter(u => ids.includes(u.id) && u.team === "blue" && u.hp > 0);
   if (!units.length) { message(g, "请先选择部队。"); return false; }
   if (["move", "attack", "patrol", "guard"].includes(order) && !point) return false;
@@ -103,12 +149,13 @@ export function issueOrder(g, ids, order, point, append = false) {
       u.pending = []; assign(u, { order, target: facility.point, targetId: facility.building.id }); count++; return;
     }
     if (order === "guard" && (point.team !== "blue" || point.id === u.id)) return;
-    if (point && ["move", "patrol"].includes(order) && !walkable(point.x, point.y, TYPES[u.type].domain)) return;
+    if (point && ["move", "patrol"].includes(order) && !walkable(point.x, point.y, TYPES[u.type].domain, g)) return;
     const formation = units.length > 1 && !point?.id;
     const p = point ? { x: point.x + (formation ? ((i % 3) - 1) * 36 : 0), y: point.y + (formation ? Math.floor(i / 3) * 36 : 0) } : null;
     const task = { order, target: p ? nearestStand(g, p, u.type) : null, targetId: point?.id ?? null };
     if (order === "harvest") task.oreId = point?.id || g.ore.id;
     if (order === "harvest" && u.type !== "harvester") { task.order = "move"; task.target = nearestStand(g, point || g.ore, u.type); }
+    if (p && !task.target) return;
     if (append && u.order !== "idle" && u.order !== "hold") u.pending.push(task);
     else { u.pending = []; assign(u, task); }
     count++;
@@ -168,10 +215,12 @@ export function placementReason(g, type, p) {
   if (g.result) return "对局已结束";
   if (g.credits < d.cost || g.alloy < d.alloy) return "晶矿或合金不足";
   if (!isVisible(g, p)) return "需要先侦察建造区域";
-  if (p.x < d.radius + 40 || p.x > 1560 - d.radius || p.y < d.radius + 40 || p.y > 860 - d.radius) return "超出地图边界";
+  const world = worldFor(g);
+  if (p.x < d.radius + 40 || p.x > world.w - 40 - d.radius || p.y < d.radius + 40 || p.y > world.h - 40 - d.radius) return "超出地图边界";
   if (type === "shipyard") {
-    if (isWater(p.x, p.y) || !Array.from({ length: 16 }, (_, i) => ({ x: p.x + Math.cos(i * Math.PI / 8) * 90, y: p.y + Math.sin(i * Math.PI / 8) * 90 })).some(q => isWater(q.x, q.y))) return "船坞需要放在湖岸陆地上";
-  } else for (let i = 0; i < 12; i++) if (!walkable(p.x + Math.cos(i * Math.PI / 6) * d.radius, p.y + Math.sin(i * Math.PI / 6) * d.radius)) return "需要完整的陆地空间";
+    if (isWater(p.x, p.y, g) || !Array.from({ length: 16 }, (_, i) => ({ x: p.x + Math.cos(i * Math.PI / 8) * 90, y: p.y + Math.sin(i * Math.PI / 8) * 90 })).some(q => isWater(q.x, q.y, g))) return "船坞需要放在湖岸陆地上";
+  } else for (let i = 0; i < 12; i++) if (!walkable(p.x + Math.cos(i * Math.PI / 6) * d.radius, p.y + Math.sin(i * Math.PI / 6) * d.radius, "ground", g)) return "需要完整的陆地空间";
+  if (world.obstacles.some(o => distance(o,p) < o.radius + d.radius + 10)) return "需要避开岩丘";
   if (g.buildings.some(b => b.hp > 0 && distance(b, p) < BUILDINGS[b.type].radius + d.radius + 14)) return "与已有建筑重叠";
   if (g.ores.some(o => distance(o, p) < d.radius + 48)) return "不能覆盖矿区";
   if (g.units.some(u => TYPES[u.type].domain !== "air" && distance(u, p) < d.radius + 12)) return "请先移开该区域的部队";
@@ -186,7 +235,7 @@ export function placeBuilding(g, type, p, rotation = 0) {
 export function setRally(g, id, p) {
   const b = g.buildings.find(b => b.id === id && b.hp > 0 && b.team === "blue");
   const type = Object.keys(TYPES).find(t => TYPES[t].producer === b?.type);
-  if (g.result || !b || !type || !walkable(p.x, p.y, TYPES[type].domain)) { message(g, "集结点不适合该建筑生产的部队。"); return false; }
+  if (g.result || !b || !type || !p || !walkable(p.x, p.y, TYPES[type].domain, g)) { message(g, "集结点不适合该建筑生产的部队。"); return false; }
   b.rally = { x: p.x, y: p.y }; message(g, "集结点已设置，新部队将自动前往。"); return true;
 }
 export function repairBuilding(g, id) {
@@ -203,35 +252,41 @@ export function startResearch(g, id) {
 }
 export function activateAbility(g, id, point) {
   const d = ABILITIES[id];
-  if (!d || g.result || (id === "scan" && (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)))) return false;
+  if (!d || g.result || (id === "scan" && (!point || !walkable(point.x, point.y, "air", g)))) return false;
   if (g.abilityEnergy < d.cost || g.cooldowns[id] > g.time) { message(g, "技能正在冷却或能量不足。"); return false; }
   g.abilityEnergy -= d.cost; g.cooldowns[id] = g.time + d.cooldown;
   if (id === "scan") { g.scans.push({ x: point.x, y: point.y, radius: 290 }); refreshVisibility(g); g.marker = { ...point, life: 3, scan: true }; }
   else g.overchargeUntil = g.time + 8;
   message(g, d.name + "已启动。" + d.description); return true;
 }
-export const FOG = { cols: 40, rows: 23, cell: 40 };
-const cellId = p => clamp(Math.floor(p.y / 40), 0, 22) * 40 + clamp(Math.floor(p.x / 40), 0, 39);
-export const isVisible = (g, p) => !g.fog || p.team === "blue" || !!g.visible[cellId(p)];
-export const isExplored = (g, p) => !g.fog || !!g.explored[cellId(p)];
+const cellId = (g, p) => {
+  const grid = fogFor(g), world = worldFor(g);
+  if (!p || p.x < 0 || p.y < 0 || p.x >= world.w || p.y >= world.h) return -1;
+  return Math.floor(p.y / grid.cell) * grid.cols + Math.floor(p.x / grid.cell);
+};
+export const isVisible = (g, p) => !g.fog || p.team === "blue" || !!g.visible[cellId(g,p)];
+export const isExplored = (g, p) => !g.fog || !!g.explored[cellId(g,p)];
 export function refreshVisibility(g) {
-  g.visible = Array(920).fill(false);
+  const {cols,rows,cell} = fogFor(g);
+  g.visible = Array(cols*rows).fill(false);
+  if (g.explored.length !== cols*rows) g.explored = Array.from({length:cols*rows},(_,i) => !!g.explored[i]);
   const sources = [...g.units.filter(u => u.team === "blue" && u.hp > 0).map(u => ({ ...u, radius: u.type === "aircraft" ? 300 : 235 })),
     ...g.buildings.filter(b => b.team === "blue" && b.hp > 0).map(b => ({ ...b, radius: 220 })), ...g.scans];
-  for (const p of sources) for (let y = Math.max(0, Math.floor((p.y - p.radius) / 40)); y <= Math.min(22, Math.floor((p.y + p.radius) / 40)); y++)
-    for (let x = Math.max(0, Math.floor((p.x - p.radius) / 40)); x <= Math.min(39, Math.floor((p.x + p.radius) / 40)); x++)
-      if (distance(p, { x: x * 40 + 20, y: y * 40 + 20 }) < p.radius) g.visible[y * 40 + x] = g.explored[y * 40 + x] = true;
+  for (const p of sources) for (let y = Math.max(0, Math.floor((p.y-p.radius)/cell)); y <= Math.min(rows-1, Math.floor((p.y+p.radius)/cell)); y++)
+    for (let x = Math.max(0, Math.floor((p.x-p.radius)/cell)); x <= Math.min(cols-1, Math.floor((p.x+p.radius)/cell)); x++)
+      if (distance(p,{x:x*cell+cell/2,y:y*cell+cell/2}) < p.radius) g.visible[y*cols+x] = g.explored[y*cols+x] = true;
 }
 // A* follows separate land/water navigation grids and avoids building footprints.
 function pathfind(g, u, target) {
   const goal = nearestStand(g, target, u.type); if (!goal) return [];
-  const key = p => Math.floor(p.y / 40) * 40 + Math.floor(p.x / 40), start = key(u), end = key(goal);
-  const point = k => ({ x: (k % 40) * 40 + 20, y: Math.floor(k / 40) * 40 + 20 });
+  const {cols} = fogFor(g);
+  const key = p => Math.floor(p.y / 40) * cols + Math.floor(p.x / 40), start = key(u), end = key(goal);
+  const point = k => ({ x: (k % cols) * 40 + 20, y: Math.floor(k / cols) * 40 + 20 });
   const open = [start], from = new Map(), costs = new Map([[start, 0]]), closed = new Set();
   while (open.length) {
     open.sort((a, b) => (costs.get(a) + distance(point(a), goal)) - (costs.get(b) + distance(point(b), goal)));
     const k = open.shift();
-    if (k === end || distance(point(k), goal) < 45) {
+    if ((k === end || distance(point(k), goal) < 45) && clearLine(g, { ...u, ...point(k) }, goal)) {
       const path = [goal]; let current = k;
       while (current !== start) { path.unshift(point(current)); current = from.get(current); }
       return path;
@@ -256,12 +311,12 @@ function move(g, u, p, dt) {
   if (!p || distance(u, p) < 7) return true;
   let next = p;
   if (TYPES[u.type].domain !== "air" && !clearLine(g, u, p)) {
-    if (!u.path.length || !u.pathGoal || distance(u.pathGoal, p) > 45) { u.path = pathfind(g, u, p); u.pathGoal = { ...p }; }
+    if ((!u.path.length && g.time >= (u.retryPathAt || 0)) || !u.pathGoal || distance(u.pathGoal, p) > 45) { u.path = pathfind(g, u, p); u.pathGoal = { ...p }; u.retryPathAt = g.time + 1; }
     if (!u.path.length) { u.stalled = (u.stalled || 0) + dt; return false; }
     next = u.path[0];
     if (distance(u, next) < 8) { u.path.shift(); next = u.path[0] || p; }
   } else u.path = [];
-  const d = distance(u, next), speed = TYPES[u.type].speed * (u.team === "blue" && g.researched.includes("logistics") ? 1.08 : 1), amount = Math.min(d, speed * dt);
+  const d = distance(u, next), speed = TYPES[u.type].speed * (u.team === "blue" && g.researched.includes("logistics") ? 1.08 : 1) * (!TYPES[u.type].domain && onRoad(g,u) ? 1.12 : 1), amount = Math.min(d, speed * dt);
   if (d > 0) {
     const x = u.x + (next.x - u.x) / d * amount, y = u.y + (next.y - u.y) / d * amount;
     if (canStand(g, x, y, u.type) || !canStand(g, u.x, u.y, u.type)) { u.x = x; u.y = y; } else u.path = [];
@@ -304,7 +359,7 @@ function reinforceEnemy(g) {
   g.wave++;
   const factory = enemyFacility(g, "factory"), airfield = enemyFacility(g, "airfield");
   g.waveAt += factory ? 55 : 75;
-  const mines = g.ores.filter(o => o.team === "gold").length;
+  const mines = g.ores.filter(o => o.team === "gold" && !o.contested && o.remaining > 0).length;
   const capacity = Math.min(factory ? 6 : 2, g.wave + mines, 18 - g.units.filter(u => u.team === "gold" && u.hp > 0).length);
   let count = 0, aircraft = false;
   for (let i = 0; i < capacity; i++) {
@@ -331,12 +386,13 @@ function directEnemy(g) {
   for (const u of forces) {
     let target = g.home, targetId = null, order = "attack";
     if (defenders.includes(u)) { target = threat; targetId = threat.id; }
+    else if (u.enemyRole === "defender" && !threat) { target = g.enemyBase; order = "hold"; }
     else if (u.enemyRole === "raider") {
-      const objectives = g.ores.filter(o => o.team !== "gold");
+      const objectives = g.ores.filter(o => o.team !== "gold" && o.remaining > 0);
       target = objectives.sort((a, b) => (a.team === "blue" ? -1 : 0) - (b.team === "blue" ? -1 : 0) || distance(u, a) - distance(u, b))[0] || g.ores.find(o => o.id === u.enemyOreId) || g.home;
       // Stay at the selected mine after taking control, until ordered elsewhere.
       const held = g.ores.find(o => o.id === u.enemyOreId);
-      if (held?.team === "gold" && distance(u, held) < 120) target = held;
+      if (held?.team === "gold" && held.remaining > 0 && distance(u, held) < 120 && (worldFor(g).id === "Legacy160" || g.units.filter(v => v.team === "gold" && v.enemyOreId === held.id && v.hp > 0).sort((a,b) => a.id-b.id)[0] === u)) target = held;
       u.enemyOreId = target.id;
       if (distance(u, target) < 80) order = "hold";
     }
@@ -345,22 +401,33 @@ function directEnemy(g) {
   }
 }
 export function update(g, dt) {
-  if (g.paused || g.result) return;
+  if (g.paused || g.result || !Number.isFinite(dt)) return;
   dt = Math.min(Math.max(0, dt), 0.1); g.time += dt;
   g.effects = g.effects.filter(e => (e.life -= dt) > 0); g.explosions = g.explosions.filter(e => (e.life -= dt) > 0);
   if (g.marker && (g.marker.life -= dt) <= 0) g.marker = null;
   g.abilityEnergy = Math.min(100, g.abilityEnergy + dt * 5);
   g.visibilityTimer -= dt; if (g.visibilityTimer <= 0) { refreshVisibility(g); g.visibilityTimer = 0.25; }
   for (const o of g.ores) {
-    const near = g.units.filter(u => u.hp > 0 && TYPES[u.type].domain !== "air" && distance(u, o) < 120);
-    const blue = near.filter(u => u.team === "blue").length, gold = near.length - blue, team = blue > gold ? "blue" : gold > blue ? "gold" : null;
-    if (team !== o.team && team === "blue") message(g, o.name + "已控制：每 3 秒 +18 晶矿、+4 合金。");
-    o.team = team; o.contested = blue > 0 && gold > 0;
+    const near = g.units.filter(u => u.hp > 0 && TYPES[u.type].domain !== "air" && distance(u,o) < 120);
+    const blue = near.filter(u => u.team === "blue").length, gold = near.length-blue;
+    const team = blue > gold ? "blue" : gold > blue ? "gold" : null;
+    o.contested = blue > 0 && gold > 0;
+    if (worldFor(g).id === "Legacy160") {
+      if (team !== o.team && team === "blue") message(g,o.name+"已控制：每 3 秒 +18 晶矿、+4 合金。");
+      o.team = team;
+    } else if (team && !o.contested && team !== o.team) {
+      if (o.captureTeam !== team) { o.captureTeam = team; o.captureProgress = 0; }
+      o.captureProgress = Math.min(1,(o.captureProgress || 0)+dt*Math.min(3,blue+gold)/6);
+      if (o.captureProgress >= 1) {
+        o.team = team; o.captureTeam = null; o.captureProgress = 0;
+        message(g,(team === "blue" ? "我方已占领" : "敌军已占领")+o.name+"。"+(team === "blue" ? "驻军离开后仍保留控制；争夺或枯竭时停止收入。" : "夺回据点可切断增援收入。"));
+      }
+    } else if (!o.contested && (!team || team === o.team)) { o.captureTeam = null; o.captureProgress = 0; }
   }
   g.incomeTimer -= dt;
   if (g.incomeTimer <= 0) {
     const e = economy(g); g.credits += e.credits; g.alloy += e.alloy;
-    g.enemyCredits += 12 + g.ores.filter(o => o.team === "gold").length * 18;
+    g.enemyCredits += 12 + g.ores.filter(o => o.team === "gold" && !o.contested && o.remaining > 0).reduce((sum,o) => sum + (o.income || 18),0);
     g.incomeTimer += 3;
   }
   for (const b of g.buildings) {
@@ -407,8 +474,9 @@ export function update(g, dt) {
       else if (move(g, u, explicit ? nearestStand(g, explicit, u.type) : u.target, dt)) finishOrder(u);
     }
     if (u.team === "gold" && u.order === "idle" && g.time < 35) {
-      u.order = "attack"; u.target = { x: g.ores[3].x, y: g.ores[3].y };
-      if (distance(u, g.ores[3]) < 100) u.order = "hold";
+      const outpost = worldFor(g).id === "Legacy160" ? g.ores[3] : g.ores.slice().sort((a,b) => distance(u,a)-distance(u,b))[0];
+      u.order = "attack"; u.target = { x: outpost.x, y: outpost.y };
+      if (distance(u,outpost) < 100) u.order = "hold";
     }
   }
   for (let i = 0; i < g.units.length; i++) for (let j = i + 1; j < g.units.length; j++) {
@@ -425,12 +493,23 @@ export function update(g, dt) {
 export function serializeGame(g) { return JSON.stringify({ ...g, labels: undefined, fps: undefined, effects: [], explosions: [] }); }
 export function restoreGame(json) {
   const g = JSON.parse(json);
-  if (g.version !== 2 || !Array.isArray(g.units) || !Array.isArray(g.buildings) || !Array.isArray(g.ores) || !Array.isArray(g.queue) || !Array.isArray(g.researched) || !Number.isFinite(g.time) || !Number.isFinite(g.credits)) throw new Error("存档版本或内容不兼容");
+  if (![2,3].includes(g.version) || !Array.isArray(g.units) || !Array.isArray(g.buildings) || !Array.isArray(g.ores) || !Array.isArray(g.queue) || !Array.isArray(g.researched) || !Number.isFinite(g.time) || !Number.isFinite(g.credits)) throw new Error("存档版本或内容不兼容");
   if (g.units.some(u => !TYPES[u.type] || !Number.isFinite(u.x) || !Number.isFinite(u.y)) || g.buildings.some(b => !BUILDINGS[b.type])) throw new Error("存档包含无效单位或建筑");
   g.home = g.buildings.find(b => b.id === "home"); g.enemyBase = g.buildings.find(b => b.id === "base"); g.ore = g.ores[0];
   if (!g.home || !g.enemyBase || !g.ore) throw new Error("存档缺少对局数据");
-  // Existing version-2 saves retain their battlefield; new AI state receives safe defaults.
+  // Version 2 had a single 1600 × 900 map: never move an existing army on load.
+  g.world = createWorld(g.version === 2 ? "Legacy160" : g.mapId || g.world?.id || "Legacy160");
+  g.mapId = g.world.id; g.version = 3;
+  const world = g.world;
+  if ([...g.units,...g.buildings,...g.ores].some(p => !Number.isFinite(p.x) || !Number.isFinite(p.y) || p.x < 0 || p.y < 0 || p.x > world.w || p.y > world.h)) throw new Error("存档坐标超出地图");
+  if (!Array.isArray(g.explored) || !Array.isArray(g.scans) || !g.cooldowns || !Array.isArray(g.research)) throw new Error("存档缺少战术数据");
+  if (!Number.isFinite(g.alloy) || !Number.isFinite(g.abilityEnergy) || !Array.isArray(g.events) || !Array.isArray(g.effects) || !Array.isArray(g.explosions)) throw new Error("存档缺少经济或事件数据");
+  if ([...g.units,...g.buildings].some(p => !Number.isFinite(p.hp) || !Number.isFinite(p.maxHp) || p.maxHp <= 0) || g.ores.some(o => !Number.isFinite(o.remaining) || o.remaining < 0)) throw new Error("存档包含无效生命值或资源");
+  if (g.queue.some(q => !TYPES[q.type]?.cost || !Number.isFinite(q.remaining) || !Number.isFinite(q.total) || !Number.isFinite(q.cost)) || g.research.some(q => !TECHS[q.id] || !Number.isFinite(q.remaining)) || g.researched.some(id => !TECHS[id])) throw new Error("存档包含无效生产或科技数据");
+  if (g.scans.some(p => !Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.radius) || p.radius <= 0)) throw new Error("存档包含无效侦察数据");
+  g.units.forEach(u => { u.pending ||= []; u.path = []; u.pathGoal = null; u.retryPathAt = 0; });
+  g.ores.forEach(o => { o.captureProgress ||= 0; o.captureTeam ||= null; });
   if (!Number.isFinite(g.enemyCredits)) g.enemyCredits = 360;
   if (!Number.isFinite(g.enemyThinkAt)) g.enemyThinkAt = Math.max(35, g.time + 3);
-  g.paused = true; refreshVisibility(g); message(g, "存档已载入，战术暂停中。"); return g;
+  selectWorld(g.world); g.paused = true; refreshVisibility(g); message(g, "存档已载入，战术暂停中。"); return g;
 }

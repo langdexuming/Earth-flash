@@ -1,13 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  createGame,
+  createGame as createMapGame,
   makeUnit,
   update,
   issueOrder,
   enqueue,
   TYPES,
 } from "../src/engine.js";
+const createGame = () => createMapGame("Legacy160");
 const tick = (g, seconds) => {
   for (let i = 0; i < seconds * 10; i++) update(g, 0.1);
 };

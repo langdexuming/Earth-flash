@@ -40,3 +40,22 @@ export function makeAudio() {
   let unlocked = false;
   return { unlock() { unlocked = true; }, play(name) { if (!unlocked) return; const a = pool[name]?.find(a => a.paused); if (a) { a.currentTime = 0; a.play().catch(() => {}); } }, dispose() { Object.values(pool).flat().forEach(a => { a.pause(); a.removeAttribute("src"); a.load(); }); } };
 }
+
+// Only material color changes; the editable source meshes and their textures are retained.
+export function finishModel(model, kind, team = "blue") {
+  model.traverse(object => {
+    if (!object.isMesh) return;
+    if (team === "gold") {
+      object.material = object.material.clone(); object.material.userData.ownedByEntity = true;
+      if (object.material.map) {
+        object.material.onBeforeCompile = shader => {
+          shader.fragmentShader = shader.fragmentShader.replace("#include <map_fragment>", "#include <map_fragment>\nfloat factionBlue = smoothstep(0.02, 0.18, diffuseColor.b - diffuseColor.r); float factionLight = dot(diffuseColor.rgb, vec3(0.299,0.587,0.114)); diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.12,0.83,0.43) * factionLight, factionBlue * 0.85);");
+        };
+        object.material.customProgramCacheKey = () => "earth-gold-faction";
+      } else if (/Alliance|ceramic/.test(object.material.name)) object.material.color.set(0x9e8150);
+    } else if (["tank", "harvester"].includes(kind) && /Alliance|ceramic/.test(object.material.name)) {
+      object.material = object.material.clone(); object.material.userData.ownedByEntity = true; object.material.color.set(0x66704a);
+    }
+  });
+  return model;
+}

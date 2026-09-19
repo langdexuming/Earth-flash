@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createGame, makeUnit, update, issueOrder, enqueue, TYPES, BUILDINGS, economy, placeBuilding, placementReason, cancelProduction, setRally, startResearch, activateAbility, refreshVisibility, isVisible, isWater, serializeGame, restoreGame, repairBuilding, canStand } from "../src/engine.js";
+import { createGame as createMapGame, makeUnit, update, issueOrder, enqueue, TYPES, BUILDINGS, economy, placeBuilding, placementReason, cancelProduction, setRally, startResearch, activateAbility, refreshVisibility, isVisible, isWater, serializeGame, restoreGame, repairBuilding, canStand } from "../src/engine.js";
+const createGame = () => createMapGame("Legacy160");
 const tick = (g, seconds) => { for (let i = 0; i < Math.ceil(seconds * 10); i++) update(g, .1); };
 const quiet = () => { const g = createGame(); g.units = g.units.filter(u => u.team === "blue"); g.waveAt = 1e6; g.incomeTimer = 1e6; return g; };
 

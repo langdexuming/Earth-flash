@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createGame, makeUnit, update, issueOrder, distance, isWater, placeBuilding, serializeGame, restoreGame } from "../src/engine.js";
+import { createGame as createMapGame, makeUnit, update, issueOrder, distance, isWater, placeBuilding, serializeGame, restoreGame } from "../src/engine.js";
 
+const createGame = () => createMapGame("Legacy160");
 const tick = (g, seconds) => { for (let i = 0; i < Math.ceil(seconds * 10); i++) update(g, .1); };
 const quiet = () => {
   const g = createGame();
